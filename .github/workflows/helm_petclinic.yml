@@ -1,0 +1,104 @@
+name: 📦 Helm - Deploy PetClinic with AWS Secrets
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'helm/petclinic/**'
+
+env:
+  CLUSTER_NAME: petclinic-automode
+  NAMESPACE: petclinic
+  SECRET_NAME: petclinic-db-secret
+  CHART_PATH: ./helm/petclinic
+
+jobs:
+  helm-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubOIDCDeployRole
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Who Am I (debug)
+        run: aws sts get-caller-identity
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Add Helm repos
+        run: |
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo add external-secrets https://charts.external-secrets.io
+          helm repo add secrets-store-csi-driver https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+          helm repo update
+
+      # 🔐 Install Secrets Store CSI Driver
+      - name: Install Secrets Store CSI Driver (Helm)
+        run: |
+          helm upgrade --install csi-secrets-store secrets-store-csi-driver/secrets-store-csi-driver \
+            --namespace kube-system \
+            --set syncSecret.enabled=true \
+            --set enableSecretRotation=true
+
+      - name: Install AWS Secrets Store CSI Driver Provider
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/aws/secrets-store-csi-driver-provider-aws/main/deployment/aws-provider-installer.yaml
+
+      - name: Wait for CSI pods to be ready
+        run: |
+          kubectl rollout status daemonset/csi-secrets-store -n kube-system --timeout=120s || true
+
+      # 🚀 External Secrets Operator
+      - name: Install External Secrets Operator
+        run: |
+          helm upgrade --install external-secrets external-secrets/external-secrets \
+            -n external-secrets \
+            --create-namespace \
+            --set installCRDs=true \
+            --set serviceAccount.create=true \
+            --set serviceAccount.name=petclinic-sa
+
+      - name: Wait for ESO Controller
+        run: |
+          kubectl rollout status deployment/external-secrets -n external-secrets --timeout=120s
+
+      - name: Wait for ESO Webhook Pod
+        run: |
+          kubectl rollout status deployment/external-secrets-webhook -n external-secrets --timeout=90s
+
+      # 🧪 Optional: Debug ExternalSecrets
+      - name: List ESO components
+        run: kubectl get all -n external-secrets
+
+      # 🎯 Deploy PetClinic Helm Chart
+      - name: Deploy PetClinic App with Helm
+        run: |
+          helm upgrade --install petclinic ${{ env.CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            -f ${{ env.CHART_PATH }}/values.yaml \
+            --set irsa.roleArn=arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/eks-petclinic-irsa-role
+      
+
+      - name: Show Ingress URL
+        run: |
+          echo "Waiting for ALB to become active..."
+          sleep 30
+          echo "Ingress:"
+          kubectl get ingress -n ${{ env.NAMESPACE }}
+          echo "Clean URL:"
+          kubectl get ingress petclinic -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'

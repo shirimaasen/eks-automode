@@ -1,0 +1,52 @@
+replicaCount: 1
+
+image:
+  repository: springcommunity/spring-framework-petclinic
+  pullPolicy: IfNotPresent
+  tag: latest
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: eks-auto-alb
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing 
+  hosts:
+    - host: ""
+      paths:
+        - path: /
+          pathType: Prefix
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+irsa:
+  roleArn: ""  # To be set via GitHub Actions
+
+externalSecret:
+  enabled: true
+  name: petclinic-db-secret
+  refreshInterval: 15s
+  secretStore:
+    name: petclinic-secretstore
+    kind: SecretStore
+  targetName: petclinic-k8s-secret
+  remoteRef:
+    key: petclinic-db-secret
+    usernameProperty: username
+    passwordProperty: password
+
+csi:
+  enabled: true
+  region: eu-north-1
+  secretName: petclinic-db-secret

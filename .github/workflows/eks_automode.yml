@@ -1,0 +1,77 @@
+name: 🧩 EKS AutoMode Terraform Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action: plan, apply, or destroy"
+        required: true
+        default: "plan"
+
+jobs:
+  terraform:
+    name: Terraform Plan / Apply / Destroy
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write  
+      contents: read   
+
+    concurrency:
+      group: terraform-lock
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubOIDCDeployRole
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: true
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+            -backend-config="key=${TF_BACKEND_KEY}" \
+            -backend-config="region=${AWS_DEFAULT_REGION}" \
+            -backend-config="dynamodb_table=${TF_BACKEND_DDB}"
+        env:
+          TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+          TF_BACKEND_KEY: ${{ secrets.TF_BACKEND_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          TF_BACKEND_DDB: ${{ secrets.TF_BACKEND_DDB }}
+
+      - name: Terraform Validate
+        run: terraform validate
+      
+      - name: Terraform Plan
+        if: github.event.inputs.action == 'plan'
+        run: |
+            terraform plan \
+              -var="github_repo=${{ github.repository }}" \
+              -var="secret_username=${{ secrets.DB_SECRET_USERNAME }}"
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        run: |
+            terraform apply \
+              -var="github_repo=${{ github.repository }}" \
+              -var="secret_username=${{ secrets.DB_SECRET_USERNAME }}" \
+              -auto-approve
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: |
+            terraform destroy \
+              -var="github_repo=${{ github.repository }}" \
+              -var="secret_username=${{ secrets.DB_SECRET_USERNAME }}" \
+              -auto-approve
+            
