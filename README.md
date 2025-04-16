@@ -7,8 +7,6 @@ This repo provisions a full **EKS Auto Mode cluster** using **Terraform**, deplo
 ## 📦 Stack Overview
 
 - ☁️ **EKS Auto Mode**
-- 🛠 **Terraform** for infrastructure
-- 🐳 **Helm** for app deployment
 - 🔐 **IRSA + AWS SM + CSI Driver** for secret injection
 - 🧪 **GitHub Actions** for CI/CD
 
